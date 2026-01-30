@@ -1,0 +1,549 @@
+'use client';
+
+import { useSocket } from '@/lib/socket';
+import { useEffect, useState, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import type { Player } from '@/types/socket';
+
+export default function ControllerPage() {
+  const { socket, isConnected } = useSocket();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [player, setPlayer] = useState<Player | null>(null);
+  const [roomCode, setRoomCode] = useState<string>('');
+  const [currentGame, setCurrentGame] = useState<string | null>(null);
+  const [isReady, setIsReady] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [isMyTurn, setIsMyTurn] = useState(false);
+  const [wordToDraw, setWordToDraw] = useState<string>('');
+  const [guessInput, setGuessInput] = useState('');
+  const [hasAnswered, setHasAnswered] = useState(false);
+  const [myAnswer, setMyAnswer] = useState<number | null>(null);
+  const [quizState, setQuizState] = useState<'playing' | 'revealing' | 'results'>('playing');
+  const [correctAnswer, setCorrectAnswer] = useState<number | null>(null);
+  const [myScore, setMyScore] = useState(0);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [lastPoint, setLastPoint] = useState<{ x: number; y: number } | null>(null);
+  const [allPlayers, setAllPlayers] = useState<Player[]>([]);
+  const [drawingData, setDrawingData] = useState<any[]>([]);
+  const [selectedColor, setSelectedColor] = useState('#000000');
+  const [canDraw, setCanDraw] = useState(false);
+
+  useEffect(() => {
+    const room = searchParams.get('room');
+    const playerId = localStorage.getItem('playerId');
+    
+    if (!room || !playerId) {
+      router.push('/join');
+      return;
+    }
+
+    setRoomCode(room);
+
+    if (!socket || !isConnected) return;
+
+    // Get room info
+    socket.emit('get-room-info', (response) => {
+      if (response.success && response.players) {
+        const foundPlayer = response.players.find((p: Player) => p.id === playerId);
+        if (foundPlayer) {
+          setPlayer(foundPlayer);
+          setAllPlayers(response.players);
+          setCurrentGame(response.currentGame || null);
+          setIsReady(true);
+        } else {
+          router.push('/join');
+        }
+      } else {
+        router.push('/join');
+      }
+    });
+
+    // Listen for game starting
+    socket.on('game-started', ({ gameName }) => {
+      setCurrentGame(gameName);
+    });
+
+    // Listen for game state updates
+    socket.on('game-state-update', (data) => {
+      if (data.type === 'drawing-init' || data.type === 'drawing-round-start') {
+        const amIDrawer = data.drawerId === playerId;
+        setIsMyTurn(amIDrawer);
+        setCanDraw(true); // Enable drawing when round starts
+        if (amIDrawer) {
+          setWordToDraw(data.word || '');
+        }
+        setDrawingData([]);
+      } else if (data.type === 'drawing-data') {
+        setDrawingData(data.points || []);
+      } else if (data.type === 'drawing-clear') {
+        setDrawingData([]);
+      } else if (data.type === 'drawing-correct-guess') {
+        // Could show notification
+      } else if (data.type === 'drawing-round-end') {
+        setCanDraw(false); // Disable drawing when round ends
+      } else if (data.type === 'quiz-question-start') {
+        // Reset answer state for new question
+        setHasAnswered(false);
+        setMyAnswer(null);
+        setQuizState('playing');
+        setCorrectAnswer(null);
+      } else if (data.type === 'quiz-question-end') {
+        // Show results
+        console.log('Quiz question ended, received data:', data);
+        setQuizState('results');
+        setCorrectAnswer(data.correctAnswer);
+        // Update my score
+        if (data.scores) {
+          const myScoreData = data.scores.find((s: any) => s.playerId === playerId);
+          console.log('My score data:', myScoreData);
+          if (myScoreData) {
+            setMyScore(myScoreData.score);
+          }
+        }
+      }
+    });
+
+    // Listen for room ending
+    socket.on('room-ended', () => {
+      localStorage.removeItem('playerId');
+      localStorage.removeItem('roomCode');
+      router.push('/');
+    });
+
+    return () => {
+      socket.off('game-started');
+      socket.off('room-ended');
+    };
+  }, [socket, isConnected, router, searchParams]);
+
+  // Draw on canvas when drawing data updates
+  useEffect(() => {
+    if (currentGame !== 'drawing' || !canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    drawingData.forEach((point, index) => {
+      if (index === 0) {
+        ctx.beginPath();
+        ctx.moveTo(point.x * canvas.width, point.y * canvas.height);
+      } else {
+        const prevPoint = drawingData[index - 1];
+        ctx.strokeStyle = point.color;
+        ctx.lineWidth = point.size;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        ctx.beginPath();
+        ctx.moveTo(prevPoint.x * canvas.width, prevPoint.y * canvas.height);
+        ctx.lineTo(point.x * canvas.width, point.y * canvas.height);
+        ctx.stroke();
+      }
+    });
+  }, [drawingData, currentGame]);
+
+  const sendInput = (action: string, data?: any) => {
+    if (!socket || !player) return;
+    console.log('Sending input:', { action, playerId: player.id, ...data });
+    socket.emit('controller-input', { action, playerId: player.id, ...data });
+  };
+
+  if (!isReady || !player) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-900">
+        <div className="text-white text-2xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // No game started - waiting screen
+  if (!currentGame) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: player.color }}>
+        <div className="text-center text-white">
+          <div className="text-6xl mb-4">📱</div>
+          <h1 className="text-4xl font-bold mb-4">{player.name}</h1>
+          <p className="text-2xl mb-2">Room: {roomCode}</p>
+          <div className="mt-8 bg-white/20 rounded-lg p-6">
+            <p className="text-xl">Waiting for host to start a game...</p>
+          </div>
+          {isConnected ? (
+            <div className="mt-4 text-white/80">✓ Connected</div>
+          ) : (
+            <div className="mt-4 text-white/80">⚠ Reconnecting...</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Game-specific controllers
+  if (currentGame === 'quiz') {
+    const handleAnswer = (index: number) => {
+      if (hasAnswered) return;
+      setHasAnswered(true);
+      setMyAnswer(index);
+      sendInput('answer', { option: index });
+    };
+
+    // Results phase - show if answer was correct
+    if (quizState === 'results' && correctAnswer !== null) {
+      const wasCorrect = myAnswer === correctAnswer;
+      
+      return (
+        <div className="min-h-screen p-4 flex items-center justify-center" style={{ backgroundColor: player.color }}>
+          <div className="max-w-md mx-auto text-center">
+            <div className="text-center text-white mb-8">
+              <h2 className="text-3xl font-bold">{player.name}</h2>
+              <p className="text-xl mt-2">Your Score: {myScore} pts</p>
+            </div>
+
+            <div className="bg-white rounded-3xl p-8 mb-6">
+              <div className="text-8xl mb-4">
+                {wasCorrect ? '✅' : '❌'}
+              </div>
+              <p className="text-2xl font-bold text-gray-800 mb-4">
+                {wasCorrect ? 'Correct!' : 'Wrong Answer'}
+              </p>
+              {myAnswer !== null && (
+                <p className="text-xl text-gray-600 mb-2">
+                  You answered: {String.fromCharCode(65 + myAnswer)}
+                </p>
+              )}
+              <p className="text-2xl font-bold text-green-600">
+                Correct Answer: {String.fromCharCode(65 + correctAnswer)}
+              </p>
+            </div>
+
+            <div className="bg-white/20 backdrop-blur-lg rounded-xl p-6 text-white">
+              <p className="text-lg">Waiting for next question...</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Playing phase - answer buttons
+    return (
+      <div className="min-h-screen p-4" style={{ backgroundColor: player.color }}>
+        <div className="max-w-md mx-auto">
+          <div className="text-center text-white mb-8 pt-8">
+            <h2 className="text-2xl font-bold">{player.name}</h2>
+            <p className="text-lg">Quiz Game</p>
+            <p className="text-xl mt-2">Score: {myScore} pts</p>
+          </div>
+
+          {hasAnswered && myAnswer !== null ? (
+            <div className="text-center">
+              <div className="bg-white/20 backdrop-blur-lg rounded-2xl p-12 mb-6">
+                <div className="text-6xl mb-4 animate-bounce">✓</div>
+                <p className="text-2xl font-bold text-white mb-2">Answer Submitted!</p>
+                <p className="text-lg text-white/80">Waiting for other players...</p>
+              </div>
+              
+              {/* Show what they answered */}
+              <div className="bg-white/10 rounded-xl p-4">
+                <p className="text-white/60 text-sm mb-2">You answered:</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {['A', 'B', 'C', 'D'].map((option, index) => (
+                    <div
+                      key={option}
+                      className={`py-3 rounded-lg font-bold text-lg ${
+                        index === myAnswer
+                          ? 'bg-yellow-400 text-gray-900'
+                          : 'bg-white/20 text-white/40'
+                      }`}
+                    >
+                      {option}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="text-center text-white mb-6">
+                <p className="text-lg font-semibold animate-pulse">⏱️ Answer Now!</p>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                {['A', 'B', 'C', 'D'].map((option, index) => (
+                  <button
+                    key={option}
+                    onClick={() => handleAnswer(index)}
+                    className="h-32 bg-white text-4xl font-bold rounded-2xl shadow-lg transition-all active:scale-95 hover:shadow-2xl"
+                    style={{ color: player.color }}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+              
+              <div className="mt-6 text-center text-white/80 text-sm">
+                <p>Tap your answer as fast as you can!</p>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (currentGame === 'drawing') {
+    // Touch handlers for mobile
+    const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+      e.preventDefault();
+      if (!isMyTurn) return;
+      setIsDrawing(true);
+      const touch = e.touches[0];
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (rect) {
+        const x = (touch.clientX - rect.left) / rect.width;
+        const y = (touch.clientY - rect.top) / rect.height;
+        setLastPoint({ x, y });
+      }
+    };
+
+    const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+      e.preventDefault();
+      if (!isDrawing || !isMyTurn || !lastPoint || !canDraw) return;
+      
+      const touch = e.touches[0];
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (rect && socket) {
+        const x = (touch.clientX - rect.left) / rect.width;
+        const y = (touch.clientY - rect.top) / rect.height;
+        
+        // Draw line on local canvas
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext('2d');
+        if (ctx && canvas) {
+          ctx.strokeStyle = selectedColor;
+          ctx.lineWidth = 5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          ctx.beginPath();
+          ctx.moveTo(lastPoint.x * canvas.width, lastPoint.y * canvas.height);
+          ctx.lineTo(x * canvas.width, y * canvas.height);
+          ctx.stroke();
+        }
+        
+        // Send to server with playerId
+        console.log('Sending draw input (touch)');
+        sendInput('draw', {
+          x,
+          y,
+          color: selectedColor,
+          size: 5
+        });
+        
+        setLastPoint({ x, y });
+      }
+    };
+
+    const handleTouchEnd = () => {
+      setIsDrawing(false);
+      setLastPoint(null);
+    };
+
+    // Mouse handlers for desktop
+    const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!isMyTurn) return;
+      setIsDrawing(true);
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (rect) {
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        setLastPoint({ x, y });
+      }
+    };
+
+    const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!isDrawing || !isMyTurn || !lastPoint || !canDraw) return;
+      
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (rect && socket) {
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        
+        // Draw line on local canvas
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext('2d');
+        if (ctx && canvas) {
+          ctx.strokeStyle = selectedColor;
+          ctx.lineWidth = 5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          ctx.beginPath();
+          ctx.moveTo(lastPoint.x * canvas.width, lastPoint.y * canvas.height);
+          ctx.lineTo(x * canvas.width, y * canvas.height);
+          ctx.stroke();
+        }
+        
+        // Send to server with playerId
+        console.log('Sending draw input (mouse)');
+        sendInput('draw', {
+          x,
+          y,
+          color: selectedColor,
+          size: 5
+        });
+        
+        setLastPoint({ x, y });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDrawing(false);
+      setLastPoint(null);
+    };
+
+    const handleMouseLeave = () => {
+      setIsDrawing(false);
+      setLastPoint(null);
+    };
+
+    const handleClear = () => {
+      if (!isMyTurn || !canDraw) return;
+      
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (ctx && canvas) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      console.log('Sending clear input');
+      sendInput('clear', {});
+    };
+
+    const handleGuess = (e: React.FormEvent) => {
+      e.preventDefault();
+      console.log('=== CONTROLLER GUESS SUBMITTED ===');
+      console.log('Guess input:', guessInput);
+      console.log('Player:', player);
+      console.log('Socket connected:', !!socket);
+      
+      if (!guessInput.trim() || !socket) {
+        console.log('Validation failed - empty input or no socket');
+        return;
+      }
+      
+      console.log('Calling sendInput with guess:', guessInput.trim());
+      sendInput('guess', { guess: guessInput.trim() });
+      
+      setGuessInput('');
+      console.log('Guess sent and input cleared');
+    };
+
+    // If it's my turn to draw
+    if (isMyTurn) {
+      return (
+        <div className="min-h-screen flex flex-col" style={{ backgroundColor: player.color }}>
+          <div className="text-center text-white p-4">
+            <h2 className="text-2xl font-bold">{player.name}</h2>
+            <p className="text-lg">Your turn to draw!</p>
+            <div className="bg-gray-900/80 backdrop-blur-sm rounded-lg p-4 mt-2 border-2 border-white/30">
+              <p className="text-sm text-gray-300">Draw this word:</p>
+              <p className="text-3xl font-bold text-yellow-300">{wordToDraw}</p>
+            </div>
+          </div>
+
+          <div className="flex-1 p-4">
+            <canvas
+              ref={canvasRef}
+              width={800}
+              height={600}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              className="w-full h-full bg-gray-50 rounded-xl shadow-lg touch-none cursor-crosshair"
+            />
+          </div>
+
+          <div className="p-4 space-y-3">
+            {/* Color Picker */}
+            <div className="bg-white rounded-xl p-3 shadow-lg">
+              <p className="text-sm font-semibold text-gray-700 mb-2">Drawing Color:</p>
+              <div className="grid grid-cols-6 gap-2">
+                {['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFA500', '#800080', '#FFC0CB', '#8B4513', '#FFFFFF'].map((color) => (
+                  <button
+                    key={color}
+                    onClick={() => setSelectedColor(color)}
+                    className={`w-10 h-10 rounded-full border-4 transition-all active:scale-90 ${
+                      selectedColor === color ? 'border-gray-900 scale-110' : 'border-gray-300'
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
+            </div>
+            
+            {/* Clear Button */}
+            <button
+              onClick={handleClear}
+              className="w-full py-4 bg-white text-lg font-semibold rounded-xl shadow-lg active:scale-95 transition-transform"
+              style={{ color: player.color }}
+            >
+              Clear Canvas
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // If it's someone else's turn - guessing mode
+    return (
+      <div className="min-h-screen flex flex-col p-4" style={{ backgroundColor: player.color }}>
+        <div className="text-center text-white mb-6">
+          <h2 className="text-2xl font-bold">{player.name}</h2>
+          <p className="text-lg">Guess what's being drawn!</p>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center text-white">
+            <div className="text-6xl mb-4">🤔</div>
+            <p className="text-xl">Watch the screen and guess!</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleGuess} className="mt-auto">
+          <div className="bg-white rounded-xl p-4 shadow-lg">
+            <input
+              type="text"
+              value={guessInput}
+              onChange={(e) => setGuessInput(e.target.value)}
+              placeholder="Type your guess..."
+              className="w-full text-2xl p-4 border-2 border-gray-300 rounded-lg mb-4 focus:outline-none focus:border-purple-500 text-gray-800"
+            />
+            <button
+              type="submit"
+              disabled={!guessInput.trim()}
+              className="w-full py-4 bg-gradient-to-r from-green-500 to-blue-500 text-white text-xl font-bold rounded-lg shadow-lg active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Submit Guess
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  // Default controller
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: player.color }}>
+      <div className="text-center text-white">
+        <h1 className="text-4xl font-bold mb-4">{player.name}</h1>
+        <p className="text-2xl">Playing: {currentGame}</p>
+      </div>
+    </div>
+  );
+}
