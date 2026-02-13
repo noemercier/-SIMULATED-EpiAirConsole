@@ -54,6 +54,7 @@ The server will start on port 3000 with both the Next.js app and Socket.IO serve
 The host can choose from:
 - **Quiz Game** - Answer trivia questions
 - **Drawing Game** - Draw and guess
+- **Platform Racer** - Race through platformer levels
 
 ## 🎯 Games
 
@@ -66,7 +67,7 @@ The host can choose from:
 - Host starts the game and displays questions
 - Each question has 4 options (A, B, C, D)
 - Players tap their answer on their phone controllers
-- 15 seconds per question
+- 15 seconds per question (auto-skips when all players answer)
 - Correct answers earn 100 points
 - Final scoreboard shows winners
 
@@ -83,11 +84,28 @@ The host can choose from:
 - Drawing appears on the host screen in real-time
 - Type guesses on your controller
 - Correct guesses earn points (faster = more points)
-- 60 seconds per turn
+- 60 seconds per turn (auto-ends when all players guess)
 
 **Controller:** 
-- **Drawing mode:** Touch canvas to draw
+- **Drawing mode:** Touch canvas to draw with color picker
 - **Guessing mode:** Text input to submit guesses
+
+### 🏃 Platform Racer
+
+**Players:** 2-8  
+**Duration:** Single race to finish
+
+**How to Play:**
+- All players race simultaneously through a platformer level
+- Jump across platforms and avoid falling
+- First to reach the finish line wins
+- Falling off the map respawns you at the start
+- Times are tracked for all players
+
+**Controller:**
+- **Joystick:** Touch and drag to move left/right
+- **Jump Button:** Large red button to jump
+- Real-time physics and collision detection
 
 ## 🏗️ Project Structure
 
@@ -100,7 +118,8 @@ epiairconsole/
 │   ├── controller/page.tsx       # Player controller interface
 │   ├── games/
 │   │   ├── quiz/page.tsx         # Quiz game host view
-│   │   └── drawing/page.tsx      # Drawing game host view
+│   │   ├── drawing/page.tsx      # Drawing game host view
+│   │   └── platformer/page.tsx   # Platformer game host view
 │   ├── layout.tsx                # Root layout with SocketProvider
 │   └── globals.css               # Global styles
 ├── lib/

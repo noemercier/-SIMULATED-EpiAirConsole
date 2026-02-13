@@ -102,6 +102,19 @@ export default function QuizGamePage() {
     };
   }, [socket, isConnected, role]);
 
+  // Check if all players have answered
+  useEffect(() => {
+    if (gameState === 'question' && role === 'host') {
+      const allAnswered = Array.from(playerScores.values()).every(score => score.answered);
+      if (allAnswered && playerScores.size > 0) {
+        console.log('✅ All players answered! Skipping timer...');
+        // All players answered, skip to revealing phase
+        setGameState('revealing');
+        setRevealDelay(3);
+      }
+    }
+  }, [playerScores, gameState, role]);
+
   // Timer effect
   useEffect(() => {
     if (gameState === 'question' && timeLeft > 0) {

@@ -35,6 +35,16 @@ function ControllerContent() {
   const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
+  // Platformer states
+  const [platformerState, setPlatformerState] = useState<'waiting' | 'racing' | 'finished'>('waiting');
+  const [myPlacement, setMyPlacement] = useState<number | null>(null);
+  const [myFinishTime, setMyFinishTime] = useState<number | null>(null);
+  const joystickRef = useRef<HTMLDivElement>(null);
+  const [joystickActive, setJoystickActive] = useState(false);
+  const [joystickPosition, setJoystickPosition] = useState({ x: 0, y: 0 });
+  const joystickIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const moveIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     const room = searchParams.get('room');
     const playerId = localStorage.getItem('playerId');
@@ -152,6 +162,21 @@ function ControllerContent() {
         } else {
           console.log('  - ❌ No scores array in data');
         }
+      } else if (data.type === 'platformer-init') {
+        setPlatformerState('waiting');
+        setMyPlacement(null);
+        setMyFinishTime(null);
+      } else if (data.type === 'platformer-start') {
+        setPlatformerState('racing');
+        setMyPlacement(null);
+        setMyFinishTime(null);
+      } else if (data.type === 'platformer-player-finished') {
+        if (data.playerId === playerId) {
+          setMyPlacement(data.placement);
+          setMyFinishTime(data.time);
+        }
+      } else if (data.type === 'platformer-end') {
+        setPlatformerState('finished');
       }
     });
 
@@ -346,6 +371,82 @@ function ControllerContent() {
     setIsReady(true);
     socket.emit('player-ready', { playerId: player.id });
   };
+
+  // ============= PLATFORMER HANDLERS =============
+  const startMoving = (direction: number) => {
+    // Clear any existing interval
+    if (moveIntervalRef.current) {
+      clearInterval(moveIntervalRef.current);
+    }
+    
+    // Set position immediately
+    setJoystickPosition({ x: direction, y: 0 });
+    
+    // Send movement command immediately
+    if (socket && platformerState === 'racing') {
+      socket.emit('controller-input', {
+        action: 'move',
+        joystickX: direction,
+        joystickY: 0
+      });
+    }
+    
+    // Continue sending while held (reduced frequency for less lag)
+    moveIntervalRef.current = setInterval(() => {
+      if (socket && platformerState === 'racing') {
+        socket.emit('controller-input', {
+          action: 'move',
+          joystickX: direction,
+          joystickY: 0
+        });
+      }
+    }, 100); // Reduced from 50ms to 100ms (10 updates/sec instead of 20)
+  };
+
+  const stopMoving = () => {
+    // Clear interval
+    if (moveIntervalRef.current) {
+      clearInterval(moveIntervalRef.current);
+      moveIntervalRef.current = null;
+    }
+    
+    // Reset position
+    setJoystickPosition({ x: 0, y: 0 });
+    
+    // Send stop signal
+    if (socket) {
+      socket.emit('controller-input', {
+        action: 'move',
+        joystickX: 0,
+        joystickY: 0
+      });
+    }
+  };
+
+  const handleJoystickEnd = () => {
+    stopMoving();
+  };
+
+  const handleJump = (e: React.TouchEvent | React.MouseEvent) => {
+    e.preventDefault();
+    if (!socket || platformerState !== 'racing') return;
+    
+    socket.emit('controller-input', {
+      action: 'jump'
+    });
+  };
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      if (joystickIntervalRef.current) {
+        clearInterval(joystickIntervalRef.current);
+      }
+      if (moveIntervalRef.current) {
+        clearInterval(moveIntervalRef.current);
+      }
+    };
+  }, []);
 
   if (!isConnected || !player) {
     return (
@@ -567,6 +668,147 @@ function ControllerContent() {
               </div>
             )}
             <p className="text-gray-600">Waiting for host to start the round...</p>
+          </div>
+        )}
+
+        {/* Platformer Game */}
+        {currentGame === 'platformer' && (
+          <div className="bg-white rounded-2xl p-6">
+            <h3 className="text-2xl font-bold mb-4 text-center text-gray-800">
+              🏃 Platform Racer 🏃
+            </h3>
+            
+            {platformerState === 'waiting' && (
+              <div className="text-center py-8">
+                <p className="text-xl text-gray-600">Waiting for race to start...</p>
+                <p className="text-sm text-gray-500 mt-2">Get ready!</p>
+              </div>
+            )}
+
+            {platformerState === 'racing' && !myPlacement && (
+              <div>
+                <p className="text-center text-xl font-bold text-green-600 mb-6">
+                  GO! Race to the finish!
+                </p>
+                
+                {/* Controls Container - Horizontal Layout for Landscape */}
+                <div className="flex gap-12 items-center justify-center min-h-[60vh] px-4">
+                  {/* D-Pad / Arrow Buttons (Left Side) */}
+                  <div className="flex flex-col items-center">
+                    <p className="text-lg text-gray-600 mb-4 font-bold">Move</p>
+                    <div className="relative w-72 h-72">
+                      {/* Center area */}
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-20 h-20 bg-gray-300 rounded-lg"></div>
+                      </div>
+                      
+                      {/* Left Arrow */}
+                      <button
+                        onTouchStart={() => startMoving(-1)}
+                        onTouchEnd={stopMoving}
+                        onMouseDown={() => startMoving(-1)}
+                        onMouseUp={stopMoving}
+                        onMouseLeave={stopMoving}
+                        className="absolute left-0 top-1/2 -translate-y-1/2 w-24 h-24 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 active:from-blue-800 active:to-blue-900 text-white rounded-xl text-5xl font-bold shadow-2xl transition touch-none border-4 border-blue-800 flex items-center justify-center select-none"
+                        style={{ WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}
+                      >
+                        ←
+                      </button>
+                      
+                      {/* Right Arrow */}
+                      <button
+                        onTouchStart={() => startMoving(1)}
+                        onTouchEnd={stopMoving}
+                        onMouseDown={() => startMoving(1)}
+                        onMouseUp={stopMoving}
+                        onMouseLeave={stopMoving}
+                        className="absolute right-0 top-1/2 -translate-y-1/2 w-24 h-24 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 active:from-blue-800 active:to-blue-900 text-white rounded-xl text-5xl font-bold shadow-2xl transition touch-none border-4 border-blue-800 flex items-center justify-center select-none"
+                        style={{ WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}
+                      >
+                        →
+                      </button>
+                      
+                      {/* Up Arrow (optional, for jumping alternative) */}
+                      <button
+                        onTouchStart={handleJump}
+                        onMouseDown={handleJump}
+                        className="absolute top-0 left-1/2 -translate-x-1/2 w-24 h-24 bg-gradient-to-b from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 active:from-green-800 active:to-green-900 text-white rounded-xl text-5xl font-bold shadow-2xl transition touch-none border-4 border-green-800 flex items-center justify-center select-none"
+                        style={{ WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}
+                      >
+                        ↑
+                      </button>
+                      
+                      {/* Down Arrow (optional, currently unused) */}
+                      <button
+                        disabled
+                        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-24 h-24 bg-gray-400 text-gray-600 rounded-xl text-5xl font-bold shadow-lg border-4 border-gray-500 flex items-center justify-center opacity-50 cursor-not-allowed select-none"
+                        style={{ WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Jump Button (Right Side) */}
+                  <div className="flex flex-col items-center">
+                    <p className="text-lg text-gray-600 mb-4 font-bold">Jump</p>
+                    <button
+                      onTouchStart={handleJump}
+                      onMouseDown={handleJump}
+                      className="w-72 h-72 bg-gradient-to-br from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 active:from-red-800 active:to-red-900 text-white rounded-full text-8xl font-bold shadow-2xl transition touch-none border-8 border-red-800 flex items-center justify-center select-none"
+                      style={{ WebkitUserSelect: 'none', WebkitTapHighlightColor: 'transparent' }}
+                    >
+                      <span className="drop-shadow-lg">⬆️</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {platformerState === 'racing' && myPlacement && (
+              <div className="text-center py-8">
+                <div className="text-6xl mb-4">
+                  {myPlacement === 1 ? '🥇' :
+                   myPlacement === 2 ? '🥈' :
+                   myPlacement === 3 ? '🥉' :
+                   '🏁'}
+                </div>
+                <p className="text-3xl font-bold text-green-600 mb-2">
+                  Finished!
+                </p>
+                <p className="text-xl text-gray-700">
+                  Place: #{myPlacement}
+                </p>
+                <p className="text-lg text-gray-600">
+                  Time: {myFinishTime ? (myFinishTime / 1000).toFixed(2) : '--'}s
+                </p>
+                <p className="text-sm text-gray-500 mt-4">
+                  Waiting for other players...
+                </p>
+              </div>
+            )}
+
+            {platformerState === 'finished' && (
+              <div className="text-center py-8">
+                <div className="text-6xl mb-4">🏆</div>
+                <p className="text-2xl font-bold text-gray-800 mb-2">
+                  Race Complete!
+                </p>
+                {myPlacement && (
+                  <>
+                    <p className="text-xl text-gray-700">
+                      You finished #{myPlacement}
+                    </p>
+                    <p className="text-lg text-gray-600">
+                      Time: {myFinishTime ? (myFinishTime / 1000).toFixed(2) : '--'}s
+                    </p>
+                  </>
+                )}
+                <p className="text-sm text-gray-500 mt-4">
+                  Check the TV for final results!
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

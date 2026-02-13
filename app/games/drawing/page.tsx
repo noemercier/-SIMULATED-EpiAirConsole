@@ -150,6 +150,22 @@ export default function DrawingGamePage() {
     }
   }, [drawingData]);
 
+  // Check if all players have guessed
+  useEffect(() => {
+    if (gameState === 'drawing' && role === 'host' && players.length > 0) {
+      const currentDrawerId = players[currentDrawerIndex]?.id;
+      const eligiblePlayers = Array.from(playerScores.values())
+        .filter(s => s.playerId !== currentDrawerId);
+      
+      const allGuessed = eligiblePlayers.length > 0 && eligiblePlayers.every(s => s.guessed);
+
+      if (allGuessed) {
+        console.log('✅ All players guessed! Ending round early...');
+        setTimeout(() => endRound(), 1000);
+      }
+    }
+  }, [playerScores, gameState, role, players, currentDrawerIndex]);
+
   // Timer
   useEffect(() => {
     if (gameState !== 'drawing' || !socket) return;
@@ -199,19 +215,6 @@ export default function DrawingGamePage() {
           playerId,
           points
         });
-      }
-
-      // Check if all players guessed
-      const eligiblePlayers = Array.from(playerScores.values())
-        .filter(s => s.playerId !== players[currentDrawerIndex]?.id);
-      
-      const allGuessed = eligiblePlayers.length > 0 && eligiblePlayers.every(s => s.guessed);
-
-      console.log('🔍 HOST: Checking if all guessed - eligible:', eligiblePlayers.length, 'all guessed:', allGuessed);
-
-      if (allGuessed) {
-        console.log('🎉 HOST: All players guessed correctly!');
-        setTimeout(() => endRound(), 1000);
       }
     }
   };

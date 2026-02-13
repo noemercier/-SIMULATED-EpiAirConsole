@@ -12,6 +12,81 @@ export default function HostPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [currentGame, setCurrentGame] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [joinUrl, setJoinUrl] = useState<string>('');
+  const [copied, setCopied] = useState(false);
+
+  const copyToClipboard = () => {
+    const url = joinUrl || `${window.location.origin}/join`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  // Get local IP address or use window location
+  useEffect(() => {
+    const getJoinUrl = async () => {
+      const hostname = window.location.hostname;
+      const port = window.location.port;
+      const protocol = window.location.protocol;
+      
+      // If it's localhost, get the local IP from the API
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        try {
+          const response = await fetch('/api/local-ip');
+          const data = await response.json();
+          
+          if (data.ip && data.ip !== 'localhost') {
+            const portStr = port ? `:${port}` : '';
+            setJoinUrl(`${protocol}//${data.ip}${portStr}/join`);
+            return;
+          }
+        } catch (error) {
+          console.error('Failed to get local IP from API:', error);
+        }
+        
+        // Fallback: Try WebRTC method
+        try {
+          const pc = new RTCPeerConnection({ iceServers: [] });
+          pc.createDataChannel('');
+          
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          
+          const localIP = await new Promise<string>((resolve) => {
+            pc.onicecandidate = (ice) => {
+              if (!ice || !ice.candidate || !ice.candidate.candidate) return;
+              
+              const ipRegex = /([0-9]{1,3}(\.[0-9]{1,3}){3})/;
+              const match = ipRegex.exec(ice.candidate.candidate);
+              
+              if (match && match[1]) {
+                pc.onicecandidate = null;
+                pc.close();
+                resolve(match[1]);
+              }
+            };
+            
+            // Fallback to localhost after 1 second
+            setTimeout(() => {
+              resolve('localhost');
+              pc.close();
+            }, 1000);
+          });
+          
+          const portStr = port ? `:${port}` : '';
+          setJoinUrl(`${protocol}//${localIP}${portStr}/join`);
+        } catch (error) {
+          // Final fallback to window.location
+          setJoinUrl(`${window.location.origin}/join`);
+        }
+      } else {
+        setJoinUrl(`${window.location.origin}/join`);
+      }
+    };
+    
+    getJoinUrl();
+  }, []);
 
   useEffect(() => {
     if (!socket || !isConnected) return;
@@ -93,9 +168,22 @@ export default function HostPage() {
           <div className="text-8xl font-bold tracking-widest mb-4">
             {roomCode}
           </div>
-          <p className="text-lg opacity-90">
-            Players can join at {window.location.origin}/join
-          </p>
+          <div className="flex flex-col items-center gap-3">
+            <p className="text-lg opacity-90">
+              Players can join at:
+            </p>
+            <div className="bg-white/20 backdrop-blur-sm rounded-lg px-6 py-3 flex items-center gap-3">
+              <code className="text-xl font-mono">
+                {joinUrl || `${window.location.origin}/join`}
+              </code>
+              <button
+                onClick={copyToClipboard}
+                className="px-4 py-2 bg-white/30 hover:bg-white/40 rounded-lg transition font-semibold"
+              >
+                {copied ? '✓ Copied!' : '📋 Copy'}
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Players List */}
@@ -126,7 +214,7 @@ export default function HostPage() {
         {!currentGame && (
           <div className="bg-gray-800 rounded-xl p-6">
             <h2 className="text-2xl font-bold mb-4">Select a Game</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <button
                 onClick={() => handleStartGame('quiz')}
                 className="bg-blue-600 hover:bg-blue-700 rounded-lg p-6 text-left transition transform hover:scale-105"
@@ -143,6 +231,15 @@ export default function HostPage() {
                 <h3 className="text-xl font-bold mb-2">🎨 Drawing Game</h3>
                 <p className="text-gray-300">Draw and guess what others are drawing</p>
                 <p className="text-sm text-gray-400 mt-2">3-8 players</p>
+              </button>
+
+              <button
+                onClick={() => handleStartGame('platformer')}
+                className="bg-purple-600 hover:bg-purple-700 rounded-lg p-6 text-left transition transform hover:scale-105"
+              >
+                <h3 className="text-xl font-bold mb-2">🏃 Platform Racer</h3>
+                <p className="text-gray-300">Race through platforms using phone controls</p>
+                <p className="text-sm text-gray-400 mt-2">2-8 players</p>
               </button>
             </div>
           </div>
